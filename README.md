@@ -4,6 +4,8 @@ usage: `htmldiff2.py [-h] [--show-config-format] [-t THREADS] [--debug] config`
         This is useful when you want to find differences between production and
         staging environments.
 
+examle call: `./htmldiff2.py example_configs/reddit_vs_reddit_beta.json`
+
 positional arguments:
 ```
   config                JSON config file. See below for config schema.

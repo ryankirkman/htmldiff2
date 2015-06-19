@@ -1,0 +1,13 @@
+{
+    "servers": [
+        { "base_url": "www.reddit.com" },
+        { "base_url": "beta.reddit.com" }
+    ],
+    "relative_urls": [
+        "/"
+    ],
+    "selectors": {
+        "hot_tab_link": "#header-bottom-left > ul > li.selected > a",
+        "new_tab_link": "#header-bottom-left > ul > li:nth-child(2) > a"
+    }
+}
