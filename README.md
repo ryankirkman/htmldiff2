@@ -20,35 +20,4 @@ optional arguments:
   --debug               disable threading for debug purposes
 ```
 
-JSON config file schema:
-```JSON
-{
-    "title": "htmldiff config",
-    "type": "object",
-    "properties": {
-        "servers": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "base_url": {"type": "string"},
-                    "auth": {
-                        "type": "array",
-                        "items": { "type": "string" }
-                    },
-                    "protocol": {"type" : "string"}
-                },
-                "required": ["base_url"]
-            }
-        },
-        "relative_urls": {
-            "type": "array",
-            "minItems": 1,
-            "items": { "type": "string" },
-            "uniqueItems": true
-        },
-        "selectors": { "type": "object" }
-    },
-    "required": ["servers", "relative_urls", "selectors"]
-}
-```
+JSON config file schema: see `config_schema.json`

@@ -6,7 +6,6 @@ import difflib
 import functools
 import json
 from multiprocessing.dummy import Pool as ThreadPool
-import sys
 
 import jsonschema
 import lxml.html
@@ -17,16 +16,113 @@ CONFIG_SCHEMA_FILE = 'config_schema.json'
 
 
 class Server(object):
-
     def __init__(self, base_url, protocol='http', auth=None):
         self.base_url = base_url
         self.protocol = protocol
         self.auth = tuple(auth) if auth else None
 
+    def __str__(self):
+        return self.get_url()
+
+    @staticmethod
+    def compare_pages(
+            relative_urls, servers, html, json, threads=1, debug=False, **kwargs):
+        """
+            relative_urls: list of str URLs
+            servers: list of Server objects
+            html: Boolean for HTML response type
+            json: Boolean for JSON response type
+        """
+        _servers = [
+            Server.factory(html=html, json=json, **server_config)
+            for server_config in servers]
+        func = functools.partial(_servers[0].compare_page, servers=_servers, **kwargs)
+        if debug:
+            differences = map(func, relative_urls)
+        else:
+            pool = ThreadPool(threads)
+            differences = pool.map(func, relative_urls)
+            pool.close()
+            pool.join()
+
+        # Flatten the list
+        return reduce(lambda x, y: x + y, differences)
+
+    @staticmethod
+    def factory(html=None, json=None, **config):
+        if html:
+            return HtmlServer(**config)
+        elif json:
+            return JsonServer(**config)
+
+        raise Exception('Factory failed to create class')
+
     def get_full_url(self, relative_url):
         return "{}://{}{}".format(self.protocol, self.base_url, relative_url)
 
-    def get_text_response(self, relative_url):
+
+class HtmlServer(Server):
+    def __init__(self, base_url, protocol='http', auth=None):
+        Server.__init__(self, base_url, protocol, auth)
+
+    @staticmethod
+    def compare_page(relative_url, servers, selectors):
+        differences = []
+
+        trees = OrderedDict()
+        for server in servers:
+            trees[server.get_full_url(relative_url)] = server.get_dom_tree(relative_url)
+
+        for selector_name, selector in selectors.iteritems():
+            results = [HtmlServer.get_text_from_tree(tree, selector) for _, tree in trees.iteritems()]
+
+            # If all results are equal, if we construct a set from the results,
+            # the length of the set should be 1
+            if len(set(results)) != 1:
+                differences.append(
+                    HtmlServer.mismatched_error_message(relative_url, selector_name, selector, trees, results))
+
+        return differences
+
+    @staticmethod
+    def mismatched_error_message(relative_url, selector_name, selector, trees, results):
+        msg = []
+        msg.append("-------------------------")
+        msg.append("Error: mismatched results")
+        for url, _ in trees.iteritems():
+            msg.append("  - {}".format(url))
+        msg.append("Selector name: {}".format(selector_name))
+        msg.append("Selector: {}".format(selector))
+        msg.append("")
+        msg.append('\n'.join(difflib.ndiff(results[0].splitlines(), results[1].splitlines())))
+
+        return '\n'.join(msg)
+
+    @staticmethod
+    def get_text_from_tree(tree, selector, strip_whitespace=True):
+        # construct a CSS Selector
+        sel = CSSSelector(selector)
+
+        # Apply the selector to the DOM tree.
+        results = sel(tree)
+
+        # Return an empty string for diffing if we match nothing
+        if len(results) < 1:
+            return ''
+
+        # get the html out of all the results
+        data = [lxml.html.tostring(result) for result in results]
+
+        if strip_whitespace:
+            data = [result.strip() for result in data]
+
+        return data[0]
+
+    def get_dom_tree(self, relative_url):
+        """ Build the DOM Tree """
+        return lxml.html.fromstring(self.get_response(relative_url))
+
+    def get_response(self, relative_url):
         url = self.get_full_url(relative_url)
         r = requests.get(url, auth=self.auth)
         if r.status_code != 200:
@@ -34,83 +130,68 @@ class Server(object):
         r.encoding = 'utf-8'
         return r.text
 
-    def get_dom_tree(self, relative_url):
-        """ Build the DOM Tree """
-        return lxml.html.fromstring(self.get_text_response(relative_url))
 
-    def __str__(self):
-        return self.get_url()
+class JsonServer(Server):
+    def __init__(self, base_url, protocol='http', auth=None):
+        Server.__init__(self, base_url, protocol, auth)
 
+    @staticmethod
+    def compare_page(relative_url, servers, keys=None):
+        differences = []
 
-def get_text_from_tree(tree, selector, strip_whitespace=True):
-    # construct a CSS Selector
-    sel = CSSSelector(selector)
+        server_responses = OrderedDict()
+        for server in servers:
+            server_responses[server.get_full_url(relative_url)] = server.get_response(relative_url)
 
-    # Apply the selector to the DOM tree.
-    results = sel(tree)
-
-    # Return an empty string for diffing if we match nothing
-    if len(results) < 1:
-        return ''
-
-    # get the html out of all the results
-    data = [lxml.html.tostring(result) for result in results]
-
-    if strip_whitespace:
-        data = [result.strip() for result in data]
-
-    return data[0]
-
-
-def mismatched_error_message(relative_url, selector_name, selector, trees, results):
-    msg = []
-    msg.append("-------------------------")
-    msg.append("Error: mismatched results")
-    for url, _ in trees.iteritems():
-        msg.append("  - {}".format(url))
-    msg.append("Selector name: {}".format(selector_name))
-    msg.append("Selector: {}".format(selector))
-    msg.append("")
-    msg.append('\n'.join(difflib.ndiff(results[0].splitlines(), results[1].splitlines())))
-
-    return '\n'.join(msg)
-
-
-def compare_page(relative_url, servers, selectors):
-    differences = []
-
-    trees = OrderedDict()
-    for server in servers:
-        trees[server.get_full_url(relative_url)] = server.get_dom_tree(relative_url)
-
-    for selector_name, selector in selectors.iteritems():
-        results = [get_text_from_tree(tree, selector) for _, tree in trees.iteritems()]
+        results = []
+        for _, response in server_responses.iteritems():
+            results.append(json.dumps(
+                JsonServer.pluck(response, keys),
+                sort_keys=True,
+                indent=4))
 
         # If all results are equal, if we construct a set from the results,
         # the length of the set should be 1
         if len(set(results)) != 1:
-            differences.append(mismatched_error_message(relative_url, selector_name, selector, trees, results))
+            differences.append(
+                JsonServer.mismatched_error_message(relative_url, results))
 
-    return differences
+        return differences
 
+    @staticmethod
+    def pluck(json_obj, keys=None):
+        if not keys or not isinstance(keys, list):
+            return json_obj
 
-def compare_pages(relative_urls, servers, selectors, threads=1, debug=False):
-    """
-        relative_urls: list of str URLs
-        selectors: dict of selecton_name, str CSS selector
-        servers: list of Server objects
-    """
-    func = functools.partial(compare_page, servers=servers, selectors=selectors)
-    if debug:
-        differences = map(func, relative_urls)
-    else:
-        pool = ThreadPool(threads)
-        differences = pool.map(func, relative_urls)
-        pool.close()
-        pool.join()
+        plucked = {}
+        for key in keys:
+            split = key.split('.')
+            temp_obj = json_obj
+            for i in xrange(len(split)):
+                temp = temp_obj.get(split[i])
+                if temp:
+                    temp_obj = temp
+                else:
+                    break
+            plucked[key] = temp_obj
 
-    # Flatten the list
-    return reduce(lambda x, y: x + y, differences)
+        return plucked
+
+    @staticmethod
+    def mismatched_error_message(relative_url, results):
+        msg = []
+        msg.append("-------------------------")
+        msg.append("Error: mismatched results")
+        msg.append("")
+        msg.append('\n'.join(difflib.ndiff(results[0].splitlines(), results[1].splitlines())))
+        return '\n'.join(msg)
+
+    def get_response(self, relative_url):
+        url = self.get_full_url(relative_url)
+        r = requests.get(url, auth=self.auth)
+        if r.status_code != 200:
+            raise Exception("Got status code {} for URL {}".format(r.status_code, url))
+        return r.json()
 
 
 def parse_args():
@@ -128,6 +209,9 @@ def parse_args():
     parser.add_argument("--show-config-format", help="show the config format", action="store_true")
     parser.add_argument("-t", "--threads", type=int, default=1, help="set the number of threads")
     parser.add_argument("--debug", help="disable threading for debug purposes", action="store_true")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--html", help="Parse responses as HTML", action="store_true")
+    group.add_argument("--json", help="Parse responses as JSON", action="store_true")
     return parser.parse_args()
 
 
@@ -136,15 +220,14 @@ def parse_config_file(filename):
         config_schema = json.load(config_schema_f)
         config = json.load(config_f)
         jsonschema.validate(config, config_schema)
-    config['servers'] = [Server(**server_config) for server_config in config['servers']]
     return config
 
 
 if __name__ == "__main__":
     args = parse_args()
     config = parse_config_file(args.config)
-    differences = compare_pages(threads=args.threads, debug=args.debug, **config)
+    differences = Server.compare_pages(threads=args.threads, debug=args.debug, html=args.html, json=args.json, **config)
 
     print "Number of differences: {}".format(len(differences))
     for difference in differences:
-        print difference
+        print difference.encode('utf-8')

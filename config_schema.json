@@ -23,7 +23,8 @@
             "items": { "type": "string" },
             "uniqueItems": true
         },
-        "selectors": { "type": "object" }
+        "selectors": { "type": "object" },
+        "keys": { "type": "array" }
     },
-    "required": ["servers", "relative_urls", "selectors"]
+    "required": ["servers", "relative_urls"]
 }
