@@ -16,8 +16,9 @@ CONFIG_SCHEMA_FILE = 'config_schema.json'
 
 
 class Server(object):
-    def __init__(self, base_url, protocol='http', auth=None):
+    def __init__(self, base_url, ignore_non_200=False, protocol='http', auth=None):
         self.base_url = base_url
+        self.ignore_non_200 = ignore_non_200
         self.protocol = protocol
         self.auth = tuple(auth) if auth else None
 
@@ -26,7 +27,7 @@ class Server(object):
 
     @staticmethod
     def compare_pages(
-            relative_urls, servers, html, json, threads=1, debug=False, **kwargs):
+            relative_urls, servers, html, json, ignore_non_200=False, threads=1, debug=False, **kwargs):
         """
             relative_urls: list of str URLs
             servers: list of Server objects
@@ -34,7 +35,7 @@ class Server(object):
             json: Boolean for JSON response type
         """
         _servers = [
-            Server.factory(html=html, json=json, **server_config)
+            Server.factory(html=html, json=json, ignore_non_200=ignore_non_200, **server_config)
             for server_config in servers]
         func = functools.partial(_servers[0].compare_page, servers=_servers, **kwargs)
         if debug:
@@ -60,10 +61,20 @@ class Server(object):
     def get_full_url(self, relative_url):
         return "{}://{}{}".format(self.protocol, self.base_url, relative_url)
 
+    def get_base_response(self, relative_url):
+        url = self.get_full_url(relative_url)
+        r = requests.get(url, auth=self.auth)
+        if r.status_code != 200:
+            if self.ignore_non_200:
+                return None
+            else:
+                raise Exception("Got status code {} for URL {}".format(r.status_code, url))
+        return r
+
 
 class HtmlServer(Server):
-    def __init__(self, base_url, protocol='http', auth=None):
-        Server.__init__(self, base_url, protocol, auth)
+    def __init__(self, base_url, ignore_non_200=False, protocol='http', auth=None):
+        Server.__init__(self, base_url, ignore_non_200, protocol, auth)
 
     @staticmethod
     def compare_page(relative_url, servers, selectors):
@@ -71,7 +82,13 @@ class HtmlServer(Server):
 
         trees = OrderedDict()
         for server in servers:
-            trees[server.get_full_url(relative_url)] = server.get_dom_tree(relative_url)
+            response = server.get_dom_tree(relative_url)
+            if not response:
+                # Early out for None server response
+                url = server.get_full_url(relative_url)
+                return ['Failed to retreive URL: {}'.format(url)]
+                # return []
+            trees[server.get_full_url(relative_url)] = response
 
         for selector_name, selector in selectors.iteritems():
             results = [HtmlServer.get_text_from_tree(tree, selector) for _, tree in trees.iteritems()]
@@ -88,7 +105,7 @@ class HtmlServer(Server):
     def mismatched_error_message(relative_url, selector_name, selector, trees, results):
         msg = []
         msg.append("-------------------------")
-        msg.append("Error: mismatched results")
+        msg.append("Error - mismatched results for: {}".format(relative_url))
         for url, _ in trees.iteritems():
             msg.append("  - {}".format(url))
         msg.append("Selector name: {}".format(selector_name))
@@ -111,29 +128,29 @@ class HtmlServer(Server):
             return ''
 
         # get the html out of all the results
-        data = [lxml.html.tostring(result) for result in results]
+        data = [result.text for result in results]
 
         if strip_whitespace:
-            data = [result.strip() for result in data]
+            data = [result.strip() if isinstance(result, basestring) else None for result in data]
 
         return data[0]
 
     def get_dom_tree(self, relative_url):
         """ Build the DOM Tree """
-        return lxml.html.fromstring(self.get_response(relative_url))
+        response = self.get_response(relative_url)
+        return lxml.html.fromstring(response) if response else None
 
     def get_response(self, relative_url):
-        url = self.get_full_url(relative_url)
-        r = requests.get(url, auth=self.auth)
-        if r.status_code != 200:
-            raise Exception("Got status code {} for URL {}".format(r.status_code, url))
+        r = Server.get_base_response(self, relative_url)
+        if not r:
+            return None
         r.encoding = 'utf-8'
         return r.text
 
 
 class JsonServer(Server):
-    def __init__(self, base_url, protocol='http', auth=None):
-        Server.__init__(self, base_url, protocol, auth)
+    def __init__(self, base_url, ignore_non_200=False, protocol='http', auth=None):
+        Server.__init__(self, base_url, ignore_non_200, protocol, auth)
 
     @staticmethod
     def compare_page(relative_url, servers, keys=None):
@@ -141,7 +158,13 @@ class JsonServer(Server):
 
         server_responses = OrderedDict()
         for server in servers:
-            server_responses[server.get_full_url(relative_url)] = server.get_response(relative_url)
+            response = server.get_response(relative_url)
+            if not response:
+                # Early out for None server response
+                url = server.get_full_url(relative_url)
+                return ['Failed to retreive URL: {}'.format(url)]
+                # return []
+            server_responses[server.get_full_url(relative_url)] = response
 
         results = []
         for _, response in server_responses.iteritems():
@@ -181,16 +204,15 @@ class JsonServer(Server):
     def mismatched_error_message(relative_url, results):
         msg = []
         msg.append("-------------------------")
-        msg.append("Error: mismatched results")
+        msg.append("Error - mismatched results for url: {}".format(relative_url))
         msg.append("")
         msg.append('\n'.join(difflib.ndiff(results[0].splitlines(), results[1].splitlines())))
         return '\n'.join(msg)
 
     def get_response(self, relative_url):
-        url = self.get_full_url(relative_url)
-        r = requests.get(url, auth=self.auth)
-        if r.status_code != 200:
-            raise Exception("Got status code {} for URL {}".format(r.status_code, url))
+        r = Server.get_base_response(self, relative_url)
+        if not r:
+            return None
         return r.json()
 
 
@@ -209,6 +231,7 @@ def parse_args():
     parser.add_argument("--show-config-format", help="show the config format", action="store_true")
     parser.add_argument("-t", "--threads", type=int, default=1, help="set the number of threads")
     parser.add_argument("--debug", help="disable threading for debug purposes", action="store_true")
+    parser.add_argument("--ignore-non-200", help="ignore responses that aren't 200 OK", action="store_true")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--html", help="Parse responses as HTML", action="store_true")
     group.add_argument("--json", help="Parse responses as JSON", action="store_true")
@@ -226,7 +249,13 @@ def parse_config_file(filename):
 if __name__ == "__main__":
     args = parse_args()
     config = parse_config_file(args.config)
-    differences = Server.compare_pages(threads=args.threads, debug=args.debug, html=args.html, json=args.json, **config)
+    differences = Server.compare_pages(
+        threads=args.threads,
+        debug=args.debug,
+        html=args.html,
+        json=args.json,
+        ignore_non_200=args.ignore_non_200,
+        **config)
 
     print "Number of differences: {}".format(len(differences))
     for difference in differences:
