@@ -16,11 +16,12 @@ CONFIG_SCHEMA_FILE = 'config_schema.json'
 
 
 class Server(object):
-    def __init__(self, base_url, ignore_non_200=False, protocol='http', auth=None):
+    def __init__(self, base_url, ignore_non_200=False, protocol='http', auth=None, headers=None):
         self.base_url = base_url
         self.ignore_non_200 = ignore_non_200
         self.protocol = protocol
         self.auth = tuple(auth) if auth else None
+        self.headers = headers
 
     def __str__(self):
         return self.get_url()
@@ -63,7 +64,7 @@ class Server(object):
 
     def get_base_response(self, relative_url):
         url = self.get_full_url(relative_url)
-        r = requests.get(url, auth=self.auth)
+        r = requests.get(url, auth=self.auth, headers=self.headers)
         if r.status_code != 200:
             if self.ignore_non_200:
                 return None
@@ -73,8 +74,8 @@ class Server(object):
 
 
 class HtmlServer(Server):
-    def __init__(self, base_url, ignore_non_200=False, protocol='http', auth=None):
-        Server.__init__(self, base_url, ignore_non_200, protocol, auth)
+    def __init__(*args, **kwargs):
+        Server.__init__(*args, **kwargs)
 
     @staticmethod
     def compare_page(relative_url, servers, selectors):
@@ -149,8 +150,8 @@ class HtmlServer(Server):
 
 
 class JsonServer(Server):
-    def __init__(self, base_url, ignore_non_200=False, protocol='http', auth=None):
-        Server.__init__(self, base_url, ignore_non_200, protocol, auth)
+    def __init__(*args, **kwargs):
+        Server.__init__(*args, **kwargs)
 
     @staticmethod
     def compare_page(relative_url, servers, keys=None):
