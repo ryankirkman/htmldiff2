@@ -25,7 +25,8 @@
             "uniqueItems": true
         },
         "selectors": {"type": "object"},
-        "keys": {"type": "array"}
+        "ignore_keys": {"type": "array"},
+        "include_keys": {"type": "array"}
     },
     "required": ["servers", "relative_urls"]
 }

@@ -28,7 +28,14 @@ class Server(object):
 
     @staticmethod
     def compare_pages(
-            relative_urls, servers, html, json, ignore_non_200=False, threads=1, debug=False, **kwargs):
+            relative_urls,
+            servers,
+            html,
+            json,
+            ignore_non_200=False,
+            threads=1,
+            debug=False,
+            **kwargs):
         """
             relative_urls: list of str URLs
             servers: list of Server objects
@@ -92,13 +99,15 @@ class HtmlServer(Server):
             trees[server.get_full_url(relative_url)] = response
 
         for selector_name, selector in selectors.iteritems():
-            results = [HtmlServer.get_text_from_tree(tree, selector) for _, tree in trees.iteritems()]
+            results = [
+                HtmlServer.get_text_from_tree(tree, selector) for _, tree in trees.iteritems()]
 
             # If all results are equal, if we construct a set from the results,
             # the length of the set should be 1
             if len(set(results)) != 1:
                 differences.append(
-                    HtmlServer.mismatched_error_message(relative_url, selector_name, selector, trees, results))
+                    HtmlServer.mismatched_error_message(
+                        relative_url, selector_name, selector, trees, results))
 
         return differences
 
@@ -154,7 +163,7 @@ class JsonServer(Server):
         Server.__init__(*args, **kwargs)
 
     @staticmethod
-    def compare_page(relative_url, servers, keys=None):
+    def compare_page(relative_url, servers, ignore_keys=None, include_keys=None):
         differences = []
 
         server_responses = OrderedDict()
@@ -170,7 +179,7 @@ class JsonServer(Server):
         results = []
         for _, response in server_responses.iteritems():
             results.append(json.dumps(
-                JsonServer.pluck(response, keys),
+                JsonServer.pluck(response, ignore_keys, include_keys),
                 sort_keys=True,
                 indent=4))
 
@@ -183,23 +192,32 @@ class JsonServer(Server):
         return differences
 
     @staticmethod
-    def pluck(json_obj, keys=None):
-        if not keys or not isinstance(keys, list):
+    def pluck(json_obj, ignore_keys=None, include_keys=None):
+        if not ignore_keys and not include_keys:
             return json_obj
+        elif ignore_keys:
+            for key in ignore_keys:
+                split = key.split('.')
+                temp_obj = json_obj
+                for i in xrange(len(split) - 1):
+                    temp_obj = temp_obj.get(split[i])
+                del temp_obj[split[-1]]
+        elif include_keys:
+            plucked = {}
+            for key in include_keys:
+                split = key.split('.')
+                temp_obj = json_obj
+                for i in xrange(len(split)):
+                    temp = temp_obj.get(split[i])
+                    if temp:
+                        temp_obj = temp
+                    else:
+                        break
+                plucked[key] = temp_obj
 
-        plucked = {}
-        for key in keys:
-            split = key.split('.')
-            temp_obj = json_obj
-            for i in xrange(len(split)):
-                temp = temp_obj.get(split[i])
-                if temp:
-                    temp_obj = temp
-                else:
-                    break
-            plucked[key] = temp_obj
+            return plucked
 
-        return plucked
+        return json_obj
 
     @staticmethod
     def mismatched_error_message(relative_url, results):
@@ -232,7 +250,8 @@ def parse_args():
     parser.add_argument("--show-config-format", help="show the config format", action="store_true")
     parser.add_argument("-t", "--threads", type=int, default=1, help="set the number of threads")
     parser.add_argument("--debug", help="disable threading for debug purposes", action="store_true")
-    parser.add_argument("--ignore-non-200", help="ignore responses that aren't 200 OK", action="store_true")
+    parser.add_argument(
+        "--ignore-non-200", help="ignore responses that aren't 200 OK", action="store_true")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--html", help="Parse responses as HTML", action="store_true")
     group.add_argument("--json", help="Parse responses as JSON", action="store_true")
